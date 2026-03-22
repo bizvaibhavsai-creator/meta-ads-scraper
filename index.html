@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meta Ads Scraper</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #fff;
+      padding: 24px 32px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    header h1 {
+      font-size: 24px;
+      font-weight: 700;
+      color: #111;
+    }
+
+    header p {
+      color: #888;
+      font-size: 14px;
+      margin-top: 4px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Search Form */
+    .search-panel {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .form-group input,
+    .form-group select {
+      width: 100%;
+      padding: 10px 14px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      color: #333;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus {
+      outline: none;
+      border-color: #333;
+    }
+
+    .form-group select {
+      cursor: pointer;
+    }
+
+    .search-btn {
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 12px 32px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .search-btn:hover { background: #555; }
+    .search-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    /* Results */
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .results-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .results-count {
+      font-size: 14px;
+      color: #888;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 60px 20px;
+      color: #888;
+    }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #333;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-msg {
+      background: #fff5f5;
+      border: 1px solid #e0b0b0;
+      color: #c00;
+      padding: 14px 18px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+
+    /* Table */
+    .table-wrap {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      overflow-x: auto;
+    }
+
+    .ads-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .ads-table thead {
+      background: #f8f8f8;
+      border-bottom: 2px solid #e0e0e0;
+    }
+
+    .ads-table th {
+      text-align: left;
+      padding: 12px 14px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+
+    .ads-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: top;
+      color: #333;
+    }
+
+    .ads-table tbody tr:hover {
+      background: #fafafa;
+    }
+
+    .ads-table .page-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ads-table .page-cell img {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #eee;
+      flex-shrink: 0;
+    }
+
+    .ads-table .page-cell-info {
+      line-height: 1.3;
+    }
+
+    .ads-table .page-cell-info strong {
+      font-size: 13px;
+      color: #111;
+      display: block;
+    }
+
+    .ads-table .page-cell-info span {
+      font-size: 11px;
+      color: #888;
+    }
+
+    .ads-table .body-cell {
+      max-width: 320px;
+      line-height: 1.4;
+      color: #555;
+    }
+
+    .ads-table .body-cell .ad-title {
+      font-weight: 600;
+      color: #222;
+      margin-bottom: 2px;
+    }
+
+    .ads-table .body-cell .ad-body {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .ads-table .thumb-cell img {
+      width: 60px;
+      height: 60px;
+      object-fit: cover;
+      border-radius: 6px;
+      background: #f0f0f0;
+    }
+
+    .tag {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 20px;
+      font-weight: 500;
+      display: inline-block;
+      margin: 1px 2px;
+    }
+
+    .tag-active {
+      background: #e6f4ea;
+      color: #1e8e3e;
+    }
+
+    .tag-inactive {
+      background: #fce8e6;
+      color: #c5221f;
+    }
+
+    .tag-platform {
+      background: #e8f0fe;
+      color: #1a73e8;
+    }
+
+    .ads-table a {
+      color: #1a73e8;
+      text-decoration: none;
+    }
+
+    .ads-table a:hover {
+      text-decoration: underline;
+    }
+
+    .export-btn {
+      background: #fff;
+      color: #333;
+      border: 1px solid #ddd;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .export-btn:hover {
+      background: #f5f5f5;
+    }
+
+    .no-results {
+      text-align: center;
+      padding: 60px 20px;
+      color: #888;
+    }
+
+    .no-results p {
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Meta Ads Scraper</h1>
+    <p>Search and explore ads from the Meta Ad Library</p>
+  </header>
+
+  <div class="container">
+    <div class="search-panel">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Search Keyword</label>
+          <input type="text" id="query" placeholder="e.g. Tesla, Nike, Coffee (comma separated)" value="Tesla">
+        </div>
+        <div class="form-group">
+          <label>Country</label>
+          <select id="country">
+            <option value="ALL">All Countries</option>
+            <option value="US">United States</option>
+            <option value="GB">United Kingdom</option>
+            <option value="CA">Canada</option>
+            <option value="AU">Australia</option>
+            <option value="DE">Germany</option>
+            <option value="FR">France</option>
+            <option value="IN">India</option>
+            <option value="BR">Brazil</option>
+            <option value="AT" selected>Austria</option>
+            <option value="IT">Italy</option>
+            <option value="ES">Spain</option>
+            <option value="NL">Netherlands</option>
+            <option value="JP">Japan</option>
+            <option value="MX">Mexico</option>
+            <option value="SE">Sweden</option>
+            <option value="CH">Switzerland</option>
+            <option value="PL">Poland</option>
+            <option value="BE">Belgium</option>
+            <option value="PT">Portugal</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Ad Type</label>
+          <select id="ad_type">
+            <option value="ALL">All Types</option>
+            <option value="POLITICAL_AND_ISSUE_ADS">Political & Issue Ads</option>
+            <option value="HOUSING_ADS">Housing Ads</option>
+            <option value="EMPLOYMENT_ADS">Employment Ads</option>
+            <option value="CREDIT_ADS">Credit Ads</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Media Type</label>
+          <select id="media_type">
+            <option value="ALL">All Media</option>
+            <option value="IMAGE">Image</option>
+            <option value="VIDEO">Video</option>
+            <option value="MEME">Meme</option>
+            <option value="NONE">No Media</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Active Status</label>
+          <select id="active_status">
+            <option value="ALL">All Ads</option>
+            <option value="ACTIVE">Active Only</option>
+            <option value="INACTIVE">Inactive Only</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Sort By</label>
+          <select id="sort_by">
+            <option value="IMPRESSIONS">Impressions</option>
+            <option value="RELEVANCY">Relevancy</option>
+            <option value="DELIVERY_START_TIME">Most Recent</option>
+          </select>
+        </div>
+      </div>
+      <button class="search-btn" id="searchBtn" onclick="searchAds()">Search Ads</button>
+    </div>
+
+    <div id="results"></div>
+  </div>
+
+  <script>
+    const API_KEY = '33561c3a56msh6a81827e09307adp1c1ff9jsn5706aefb3a0f';
+    const API_HOST = 'ad-libraries-realtimeapi1.p.rapidapi.com';
+
+    async function fetchKeyword(keyword, filters) {
+      const params = new URLSearchParams({ query: keyword, ...filters });
+      const res = await fetch(
+        `https://ad-libraries-realtimeapi1.p.rapidapi.com/ad_libraries/meta_ads/meta_ads?${params}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-rapidapi-host': API_HOST,
+            'x-rapidapi-key': API_KEY,
+          },
+        }
+      );
+      if (!res.ok) throw new Error(`API returned ${res.status} for "${keyword}"`);
+      const json = await res.json();
+      const edges = json?.data?.ad_library_main?.search_results_connection?.edges || [];
+      const count = json?.data?.ad_library_main?.search_results_connection?.count || 0;
+      return { keyword, edges, count };
+    }
+
+    async function searchAds() {
+      const raw = document.getElementById('query').value.trim();
+      if (!raw) {
+        showError('Please enter a search keyword.');
+        return;
+      }
+
+      const keywords = raw.split(',').map(k => k.trim()).filter(Boolean);
+      if (!keywords.length) {
+        showError('Please enter at least one keyword.');
+        return;
+      }
+
+      const filters = {
+        country: document.getElementById('country').value,
+        ad_type: document.getElementById('ad_type').value,
+        media_type: document.getElementById('media_type').value,
+        active_status: document.getElementById('active_status').value,
+        sort_by: document.getElementById('sort_by').value,
+      };
+
+      const btn = document.getElementById('searchBtn');
+      const resultsDiv = document.getElementById('results');
+      btn.disabled = true;
+      btn.textContent = 'Searching...';
+      resultsDiv.innerHTML = `<div class="loading"><div class="spinner"></div><p>Fetching ads for ${keywords.length} keyword${keywords.length > 1 ? 's' : ''}...</p></div>`;
+
+      try {
+        const results = await Promise.all(keywords.map(kw => fetchKeyword(kw, filters)));
+
+        let allEdges = [];
+        let totalCount = 0;
+        for (const r of results) {
+          totalCount += r.count;
+          for (const edge of r.edges) {
+            const ads = edge?.node?.collated_results || [];
+            for (const ad of ads) {
+              ad._keyword = r.keyword;
+            }
+          }
+          allEdges.push(...r.edges);
+        }
+
+        renderResults(allEdges, totalCount, keywords.join(', '));
+      } catch (err) {
+        showError(`Failed to fetch ads: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Search Ads';
+      }
+    }
+
+    function showError(msg) {
+      document.getElementById('results').innerHTML = `<div class="error-msg">${escapeHtml(msg)}</div>`;
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function formatDate(timestamp) {
+      if (!timestamp) return 'N/A';
+      return new Date(timestamp * 1000).toLocaleDateString('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric'
+      });
+    }
+
+    let lastAdsData = [];
+
+    function renderResults(edges, totalCount, query) {
+      const resultsDiv = document.getElementById('results');
+
+      // Flatten all ads
+      lastAdsData = [];
+      for (const edge of edges) {
+        const results = edge?.node?.collated_results || [];
+        for (const ad of results) {
+          lastAdsData.push(ad);
+        }
+      }
+
+      if (!lastAdsData.length) {
+        resultsDiv.innerHTML = '<div class="no-results"><p>No ads found. Try a different keyword or filters.</p></div>';
+        return;
+      }
+
+      let html = `
+        <div class="results-header">
+          <h2>Results for "${escapeHtml(query)}"</h2>
+          <div>
+            <button class="export-btn" onclick="exportCSV()">Export CSV</button>
+            <span class="results-count" style="margin-left:12px">${totalCount.toLocaleString()} total ads found</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+        <table class="ads-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Keyword</th>
+              <th>Page</th>
+              <th>Ad Content</th>
+              <th>Status</th>
+              <th>Platforms</th>
+              <th>CTA</th>
+              <th>Start Date</th>
+              <th>End Date</th>
+              <th>Link</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      for (const ad of lastAdsData) {
+        html += renderAdRow(ad);
+      }
+
+      html += '</tbody></table></div>';
+      resultsDiv.innerHTML = html;
+    }
+
+    function renderAdRow(ad) {
+      const snap = ad.snapshot || {};
+      const images = snap.images || [];
+      const title = snap.title || '';
+      const bodyText = snap.body?.text || '';
+      const pageName = snap.page_name || ad.page_name || 'Unknown Page';
+      const pageImg = snap.page_profile_picture_url || '';
+      const pageCategories = snap.page_categories || [];
+      const platforms = (ad.publisher_platform || []).map(p => p.toLowerCase().replace('_', ' '));
+      const isActive = ad.is_active;
+      const ctaText = snap.cta_text || '';
+      const linkUrl = snap.link_url || '';
+      const pageUri = snap.page_profile_uri || '';
+
+      const thumbUrl = images.length ? (images[0].resized_image_url || images[0].original_image_url) : '';
+
+      return `
+        <tr>
+          <td class="thumb-cell">
+            ${thumbUrl ? `<img src="${thumbUrl}" alt="" onerror="this.style.display='none'">` : ''}
+          </td>
+          <td style="white-space:nowrap">${escapeHtml(ad._keyword || '')}</td>
+          <td>
+            <div class="page-cell">
+              ${pageImg ? `<img src="${pageImg}" alt="">` : ''}
+              <div class="page-cell-info">
+                <strong>${escapeHtml(pageName)}</strong>
+                <span>${pageCategories.map(c => escapeHtml(c)).join(', ') || ''}</span>
+              </div>
+            </div>
+          </td>
+          <td class="body-cell">
+            ${title ? `<div class="ad-title">${escapeHtml(title)}</div>` : ''}
+            <div class="ad-body">${escapeHtml(bodyText)}</div>
+          </td>
+          <td><span class="tag ${isActive ? 'tag-active' : 'tag-inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
+          <td>${platforms.map(p => `<span class="tag tag-platform">${p}</span>`).join(' ')}</td>
+          <td>${ctaText ? escapeHtml(ctaText) : ''}</td>
+          <td style="white-space:nowrap">${formatDate(ad.start_date)}</td>
+          <td style="white-space:nowrap">${formatDate(ad.end_date)}</td>
+          <td>${pageUri ? `<a href="${pageUri}" target="_blank" rel="noopener">View</a>` : ''}</td>
+        </tr>
+      `;
+    }
+
+    function exportCSV() {
+      if (!lastAdsData.length) return;
+
+      const headers = ['Keyword', 'Page Name', 'Category', 'Title', 'Body Text', 'Status', 'Platforms', 'CTA', 'Link URL', 'Start Date', 'End Date', 'Page URL'];
+      const rows = lastAdsData.map(ad => {
+        const snap = ad.snapshot || {};
+        return [
+          ad._keyword || '',
+          snap.page_name || ad.page_name || '',
+          (snap.page_categories || []).join('; '),
+          snap.title || '',
+          (snap.body?.text || '').replace(/\n/g, ' '),
+          ad.is_active ? 'Active' : 'Inactive',
+          (ad.publisher_platform || []).join('; '),
+          snap.cta_text || '',
+          snap.link_url || '',
+          formatDate(ad.start_date),
+          formatDate(ad.end_date),
+          snap.page_profile_uri || ''
+        ];
+      });
+
+      const csvContent = [headers, ...rows]
+        .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'meta_ads_export.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // Allow Enter key to trigger search
+    document.getElementById('query').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') searchAds();
+    });
+  </script>
+</body>
+</html>
