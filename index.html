@@ -306,6 +306,112 @@
     .no-results p {
       font-size: 16px;
     }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal {
+      background: #fff;
+      border-radius: 12px;
+      padding: 28px;
+      width: 460px;
+      max-width: 90vw;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    }
+
+    .modal h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #111;
+      margin-bottom: 6px;
+    }
+
+    .modal p {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    .modal input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #333;
+      margin-bottom: 16px;
+    }
+
+    .modal input:focus {
+      outline: none;
+      border-color: #333;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .modal-actions button {
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+    }
+
+    .modal-cancel {
+      background: #f0f0f0;
+      color: #333;
+    }
+
+    .modal-cancel:hover { background: #e5e5e5; }
+
+    .modal-send {
+      background: #333;
+      color: #fff;
+    }
+
+    .modal-send:hover { background: #555; }
+    .modal-send:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .clay-progress {
+      margin-top: 14px;
+      font-size: 13px;
+      color: #555;
+    }
+
+    .clay-progress .bar {
+      height: 6px;
+      background: #e0e0e0;
+      border-radius: 3px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+
+    .clay-progress .bar-fill {
+      height: 100%;
+      background: #1e8e3e;
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
   </style>
 </head>
 <body>
@@ -388,6 +494,23 @@
     </div>
 
     <div id="results"></div>
+  </div>
+
+  <!-- Clay Webhook Modal -->
+  <div class="modal-overlay" id="clayModal">
+    <div class="modal">
+      <h3>Export to Clay</h3>
+      <p>Paste your Clay webhook URL below. Rows will be sent one per second.</p>
+      <input type="text" id="clayWebhookUrl" placeholder="https://app.clay.com/webhook/...">
+      <div class="clay-progress" id="clayProgress" style="display:none">
+        <span id="clayStatusText">Sending row 0 of 0...</span>
+        <div class="bar"><div class="bar-fill" id="clayBarFill" style="width:0%"></div></div>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-cancel" id="clayCancelBtn" onclick="closeClayModal()">Cancel</button>
+        <button class="modal-send" id="claySendBtn" onclick="startClayExport()">Send Data</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -507,6 +630,7 @@
           <h2>Results for "${escapeHtml(query)}"</h2>
           <div>
             <button class="export-btn" onclick="exportCSV()">Export CSV</button>
+            <button class="export-btn" style="margin-left:8px" onclick="openClayModal()">Export to Clay</button>
             <span class="results-count" style="margin-left:12px">${totalCount.toLocaleString()} total ads found</span>
           </div>
         </div>
@@ -615,6 +739,99 @@
       a.download = 'meta_ads_export.csv';
       a.click();
       URL.revokeObjectURL(url);
+    }
+
+    // Clay webhook export
+    let clayAbort = false;
+
+    function openClayModal() {
+      if (!lastAdsData.length) return;
+      clayAbort = false;
+      document.getElementById('clayWebhookUrl').value = '';
+      document.getElementById('clayProgress').style.display = 'none';
+      document.getElementById('claySendBtn').disabled = false;
+      document.getElementById('claySendBtn').textContent = 'Send Data';
+      document.getElementById('clayModal').classList.add('active');
+    }
+
+    function closeClayModal() {
+      clayAbort = true;
+      document.getElementById('clayModal').classList.remove('active');
+    }
+
+    async function startClayExport() {
+      const webhookUrl = document.getElementById('clayWebhookUrl').value.trim();
+      if (!webhookUrl) {
+        document.getElementById('clayWebhookUrl').style.borderColor = '#c5221f';
+        return;
+      }
+      document.getElementById('clayWebhookUrl').style.borderColor = '#ddd';
+
+      const sendBtn = document.getElementById('claySendBtn');
+      const cancelBtn = document.getElementById('clayCancelBtn');
+      const progress = document.getElementById('clayProgress');
+      const statusText = document.getElementById('clayStatusText');
+      const barFill = document.getElementById('clayBarFill');
+
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending...';
+      progress.style.display = 'block';
+      clayAbort = false;
+
+      const total = lastAdsData.length;
+      let sent = 0;
+      let failed = 0;
+
+      for (let i = 0; i < total; i++) {
+        if (clayAbort) break;
+
+        const ad = lastAdsData[i];
+        const snap = ad.snapshot || {};
+        const payload = {
+          keyword: ad._keyword || '',
+          page_name: snap.page_name || ad.page_name || '',
+          category: (snap.page_categories || []).join('; '),
+          title: snap.title || '',
+          body_text: snap.body?.text || '',
+          status: ad.is_active ? 'Active' : 'Inactive',
+          platforms: (ad.publisher_platform || []).join('; '),
+          cta: snap.cta_text || '',
+          link_url: snap.link_url || '',
+          start_date: formatDate(ad.start_date),
+          end_date: formatDate(ad.end_date),
+          page_url: snap.page_profile_uri || '',
+          image_url: (snap.images && snap.images.length) ? (snap.images[0].original_image_url || '') : ''
+        };
+
+        try {
+          await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            mode: 'no-cors'
+          });
+          sent++;
+        } catch (e) {
+          failed++;
+        }
+
+        const done = i + 1;
+        const pct = Math.round((done / total) * 100);
+        statusText.textContent = `Sent ${done} of ${total}${failed ? ` (${failed} failed)` : ''}`;
+        barFill.style.width = pct + '%';
+
+        // Wait 1 second before next row (skip wait on last row)
+        if (i < total - 1 && !clayAbort) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      if (!clayAbort) {
+        sendBtn.textContent = 'Done!';
+        statusText.textContent = `Completed: ${sent} sent${failed ? `, ${failed} failed` : ''} of ${total}`;
+        barFill.style.width = '100%';
+        cancelBtn.textContent = 'Close';
+      }
     }
 
     // Allow Enter key to trigger search
