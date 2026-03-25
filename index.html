@@ -418,7 +418,7 @@
 
   <header>
     <h1>Meta Ads Scraper</h1>
-    <p>Search and explore ads from the Meta Ad Library</p>
+    <p>Search and explore ads from the Meta Ad Library <a href="#" onclick="event.preventDefault(); localStorage.removeItem('apify_token'); location.reload();" style="color:#888;font-size:12px;margin-left:8px">Change API Token</a></p>
   </header>
 
   <div class="container">
@@ -485,9 +485,12 @@
           <label>Sort By</label>
           <select id="sort_by">
             <option value="IMPRESSIONS">Impressions</option>
-            <option value="RELEVANCY">Relevancy</option>
-            <option value="DELIVERY_START_TIME">Most Recent</option>
+            <option value="RECENT">Most Recent</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label>Max Ads (optional)</label>
+          <input type="number" id="max_ads" placeholder="Leave empty for all" min="1">
         </div>
       </div>
       <button class="search-btn" id="searchBtn" onclick="searchAds()">Search Ads</button>
@@ -514,27 +517,148 @@
   </div>
 
   <script>
-    const API_KEY = '33561c3a56msh6a81827e09307adp1c1ff9jsn5706aefb3a0f';
-    const API_HOST = 'ad-libraries-realtimeapi1.p.rapidapi.com';
+    const APIFY_ACTOR = 'curious_coder~facebook-ads-library-scraper';
+    const APIFY_BASE = 'https://api.apify.com/v2';
 
-    async function fetchKeyword(keyword, filters) {
-      const params = new URLSearchParams({ query: keyword, ...filters });
-      const res = await fetch(
-        `https://ad-libraries-realtimeapi1.p.rapidapi.com/ad_libraries/meta_ads/meta_ads?${params}`,
-        {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-rapidapi-host': API_HOST,
-            'x-rapidapi-key': API_KEY,
-          },
+    function getApifyToken() {
+      let token = localStorage.getItem('apify_token');
+      if (!token) {
+        token = prompt('Enter your Apify API token:');
+        if (token) localStorage.setItem('apify_token', token.trim());
+      }
+      return token ? token.trim() : null;
+    }
+
+    const APIFY_TOKEN = getApifyToken();
+
+    // Build a Facebook Ad Library URL from form inputs
+    function buildAdLibraryUrl(keyword, filters) {
+      const params = new URLSearchParams();
+      params.set('active_status', filters.active_status === 'ALL' ? 'all' : filters.active_status.toLowerCase());
+      params.set('ad_type', filters.ad_type === 'ALL' ? 'all' : filters.ad_type.toLowerCase());
+      params.set('country', filters.country === 'ALL' ? 'ALL' : filters.country);
+      params.set('q', keyword);
+      params.set('search_type', 'keyword_unordered');
+      params.set('media_type', filters.media_type === 'ALL' ? 'all' : filters.media_type.toLowerCase());
+      return `https://www.facebook.com/ads/library/?${params.toString()}`;
+    }
+
+    // Build the Apify actor input payload
+    function buildApifyInput(keywords, filters, maxAds) {
+      const SORT_MAP = { IMPRESSIONS: 'impressions_desc', RECENT: 'most_recent' };
+      const ACTIVE_MAP = { ALL: 'all', ACTIVE: 'active', INACTIVE: 'inactive' };
+
+      const urls = keywords.map(kw => ({ url: buildAdLibraryUrl(kw, filters) }));
+
+      return {
+        urls,
+        count: Math.max(maxAds || 5000, 10),
+        'scrapePageAds.activeStatus': ACTIVE_MAP[filters.active_status] || 'all',
+        'scrapePageAds.sortBy': SORT_MAP[filters.sort_by] || 'impressions_desc',
+        'scrapePageAds.countryCode': filters.country === 'ALL' ? 'ALL' : filters.country,
+      };
+    }
+
+    // Retry wrapper for fetch calls
+    async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const res = await fetch(url, options);
+          if (res.status >= 500 && attempt < maxRetries) {
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+            continue;
+          }
+          return res;
+        } catch (err) {
+          if (attempt === maxRetries) throw err;
+          await new Promise(r => setTimeout(r, 1000 * attempt));
         }
-      );
-      if (!res.ok) throw new Error(`API returned ${res.status} for "${keyword}"`);
-      const json = await res.json();
-      const edges = json?.data?.ad_library_main?.search_results_connection?.edges || [];
-      const count = json?.data?.ad_library_main?.search_results_connection?.count || 0;
-      return { keyword, edges, count };
+      }
+    }
+
+    // Start an Apify actor run
+    async function startApifyRun(input) {
+      const url = `${APIFY_BASE}/acts/${APIFY_ACTOR}/runs?token=${APIFY_TOKEN}`;
+      const res = await fetchWithRetry(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`Failed to start scraper: ${res.status} ${detail}`);
+      }
+      return await res.json();
+    }
+
+    // Poll an Apify run until it finishes
+    async function pollApifyRun(runId, onStatus) {
+      const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'ABORTED', 'TIMED-OUT']);
+      const POLL_INTERVAL = 3000;
+
+      while (true) {
+        const res = await fetchWithRetry(`${APIFY_BASE}/actor-runs/${runId}?token=${APIFY_TOKEN}`);
+        if (!res.ok) throw new Error(`Failed to check run status: ${res.status}`);
+        const { data } = await res.json();
+
+        if (onStatus) onStatus(data.status, data.stats);
+
+        if (TERMINAL.has(data.status)) {
+          if (data.status !== 'SUCCEEDED') {
+            throw new Error(`Scraper run ${data.status.toLowerCase()}. Run ID: ${runId}`);
+          }
+          return data;
+        }
+
+        await new Promise(r => setTimeout(r, POLL_INTERVAL));
+      }
+    }
+
+    // Fetch all items from an Apify dataset
+    async function fetchDatasetItems(datasetId) {
+      const res = await fetchWithRetry(`${APIFY_BASE}/datasets/${datasetId}/items?token=${APIFY_TOKEN}&format=json`);
+      if (!res.ok) throw new Error(`Failed to fetch results: ${res.status}`);
+      return await res.json();
+    }
+
+    // Normalize Apify output to match our rendering expectations
+    function normalizeAds(items, keywords) {
+      // Filter out only error items (keep everything else)
+      const errorItems = items.filter(item => item.error);
+      const validItems = items.filter(item => !item.error);
+      if (errorItems.length) console.warn(`Filtered out ${errorItems.length} error items:`, errorItems);
+      console.log(`Processing ${validItems.length} of ${items.length} total items`);
+      return validItems.map(item => {
+        // Try to determine which keyword this ad came from
+        let keyword = '';
+        if (item.searchQuery) {
+          keyword = item.searchQuery;
+        } else if (item.url || item.sourceUrl) {
+          try {
+            const u = new URL(item.url || item.sourceUrl);
+            keyword = u.searchParams.get('q') || '';
+          } catch (_) {}
+        }
+        if (!keyword && keywords.length === 1) {
+          keyword = keywords[0];
+        }
+        item._keyword = keyword || keywords.join(', ');
+
+        // Normalize is_active to boolean
+        if (typeof item.is_active === 'string') {
+          item.is_active = item.is_active === 'ACTIVE' || item.is_active === 'true';
+        }
+
+        // Ensure publisher_platform is an array
+        if (item.publisher_platform && !Array.isArray(item.publisher_platform)) {
+          item.publisher_platform = [item.publisher_platform];
+        }
+
+        // Ensure snapshot exists
+        if (!item.snapshot) item.snapshot = {};
+
+        return item;
+      });
     }
 
     async function searchAds() {
@@ -558,29 +682,43 @@
         sort_by: document.getElementById('sort_by').value,
       };
 
+      const maxAdsInput = document.getElementById('max_ads').value;
+      const maxAds = maxAdsInput ? parseInt(maxAdsInput, 10) : 0;
+
       const btn = document.getElementById('searchBtn');
       const resultsDiv = document.getElementById('results');
       btn.disabled = true;
       btn.textContent = 'Searching...';
-      resultsDiv.innerHTML = `<div class="loading"><div class="spinner"></div><p>Fetching ads for ${keywords.length} keyword${keywords.length > 1 ? 's' : ''}...</p></div>`;
 
       try {
-        const results = await Promise.all(keywords.map(kw => fetchKeyword(kw, filters)));
+        // Step 1: Build input and start the Apify actor
+        const input = buildApifyInput(keywords, filters, maxAds);
+        resultsDiv.innerHTML = `<div class="loading"><div class="spinner"></div><p>Starting scraper for ${keywords.length} keyword${keywords.length > 1 ? 's' : ''}...</p></div>`;
 
-        let allEdges = [];
-        let totalCount = 0;
-        for (const r of results) {
-          totalCount += r.count;
-          for (const edge of r.edges) {
-            const ads = edge?.node?.collated_results || [];
-            for (const ad of ads) {
-              ad._keyword = r.keyword;
-            }
-          }
-          allEdges.push(...r.edges);
-        }
+        const runResponse = await startApifyRun(input);
+        const runId = runResponse.data.id;
+        const datasetId = runResponse.data.defaultDatasetId;
 
-        renderResults(allEdges, totalCount, keywords.join(', '));
+        // Step 2: Poll for completion
+        const startTime = Date.now();
+        await pollApifyRun(runId, (status) => {
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          const mins = Math.floor(elapsed / 60);
+          const secs = elapsed % 60;
+          const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+          resultsDiv.innerHTML = `<div class="loading"><div class="spinner"></div><p>Scraper running... Status: ${status} (${timeStr} elapsed)</p></div>`;
+        });
+
+        // Step 3: Fetch results
+        resultsDiv.innerHTML = `<div class="loading"><div class="spinner"></div><p>Fetching results...</p></div>`;
+        const items = await fetchDatasetItems(datasetId);
+
+        // Step 4: Normalize and render
+        const allAds = normalizeAds(items, keywords);
+        // Log first item to console for debugging field mappings
+        if (allAds.length) console.log('First ad item:', allAds[0]);
+        renderResults(allAds, allAds.length, keywords.join(', '));
+
       } catch (err) {
         showError(`Failed to fetch ads: ${err.message}`);
       } finally {
@@ -599,31 +737,45 @@
       return div.innerHTML;
     }
 
-    function formatDate(timestamp) {
-      if (!timestamp) return 'N/A';
-      return new Date(timestamp * 1000).toLocaleDateString('en-US', {
+    function formatDate(dateValue) {
+      if (!dateValue) return 'N/A';
+      let d;
+      if (typeof dateValue === 'number') {
+        // Handle both seconds and milliseconds timestamps
+        d = dateValue > 1e12 ? new Date(dateValue) : new Date(dateValue * 1000);
+      } else {
+        d = new Date(dateValue);
+      }
+      if (isNaN(d.getTime())) return 'N/A';
+      return d.toLocaleDateString('en-US', {
         year: 'numeric', month: 'short', day: 'numeric'
       });
     }
 
     let lastAdsData = [];
+    let lastGroupedData = [];
 
-    function renderResults(edges, totalCount, query) {
+    function renderResults(allAds, totalCount, query) {
       const resultsDiv = document.getElementById('results');
+      lastAdsData = allAds;
 
-      // Flatten all ads
-      lastAdsData = [];
-      for (const edge of edges) {
-        const results = edge?.node?.collated_results || [];
-        for (const ad of results) {
-          lastAdsData.push(ad);
-        }
-      }
-
-      if (!lastAdsData.length) {
+      if (!allAds.length) {
         resultsDiv.innerHTML = '<div class="no-results"><p>No ads found. Try a different keyword or filters.</p></div>';
         return;
       }
+
+      // Group by advertiser (page_id or page_name)
+      const advertiserMap = new Map();
+      for (const ad of allAds) {
+        const snap = ad.snapshot || {};
+        const key = ad.page_id || snap.page_name || ad.page_name || 'Unknown';
+        if (!advertiserMap.has(key)) {
+          advertiserMap.set(key, { representative: ad, ads: [] });
+        }
+        advertiserMap.get(key).ads.push(ad);
+      }
+
+      lastGroupedData = Array.from(advertiserMap.values());
 
       let html = `
         <div class="results-header">
@@ -631,7 +783,7 @@
           <div>
             <button class="export-btn" onclick="exportCSV()">Export CSV</button>
             <button class="export-btn" style="margin-left:8px" onclick="openClayModal()">Export to Clay</button>
-            <span class="results-count" style="margin-left:12px">${totalCount.toLocaleString()} total ads found</span>
+            <span class="results-count" style="margin-left:12px">${allAds.length} ads from ${lastGroupedData.length} advertisers (${totalCount.toLocaleString()} total in library)</span>
           </div>
         </div>
         <div class="table-wrap">
@@ -642,6 +794,7 @@
               <th>Keyword</th>
               <th>Page</th>
               <th>Ad Content</th>
+              <th># Ads</th>
               <th>Status</th>
               <th>Platforms</th>
               <th>CTA</th>
@@ -653,15 +806,15 @@
           <tbody>
       `;
 
-      for (const ad of lastAdsData) {
-        html += renderAdRow(ad);
+      for (const group of lastGroupedData) {
+        html += renderAdRow(group.representative, group.ads.length);
       }
 
       html += '</tbody></table></div>';
       resultsDiv.innerHTML = html;
     }
 
-    function renderAdRow(ad) {
+    function renderAdRow(ad, adCount) {
       const snap = ad.snapshot || {};
       const images = snap.images || [];
       const title = snap.title || '';
@@ -675,7 +828,15 @@
       const linkUrl = snap.link_url || '';
       const pageUri = snap.page_profile_uri || '';
 
-      const thumbUrl = images.length ? (images[0].resized_image_url || images[0].original_image_url) : '';
+      // Fallback to cards for carousel/video ads where images[] is empty
+      const cards = snap.cards || [];
+      let thumbUrl = images.length ? (images[0].resized_image_url || images[0].original_image_url) : '';
+      if (!thumbUrl && cards.length) {
+        thumbUrl = cards[0].resized_image_url || cards[0].original_image_url || '';
+      }
+
+      // Prefer ad_library_url (direct ad link) over page_profile_uri
+      const adLink = ad.ad_library_url || pageUri;
 
       return `
         <tr>
@@ -696,26 +857,29 @@
             ${title ? `<div class="ad-title">${escapeHtml(title)}</div>` : ''}
             <div class="ad-body">${escapeHtml(bodyText)}</div>
           </td>
+          <td style="text-align:center;font-weight:600">${adCount}</td>
           <td><span class="tag ${isActive ? 'tag-active' : 'tag-inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
           <td>${platforms.map(p => `<span class="tag tag-platform">${p}</span>`).join(' ')}</td>
           <td>${ctaText ? escapeHtml(ctaText) : ''}</td>
           <td style="white-space:nowrap">${formatDate(ad.start_date)}</td>
           <td style="white-space:nowrap">${formatDate(ad.end_date)}</td>
-          <td>${pageUri ? `<a href="${pageUri}" target="_blank" rel="noopener">View</a>` : ''}</td>
+          <td>${adLink ? `<a href="${adLink}" target="_blank" rel="noopener">View</a>` : ''}</td>
         </tr>
       `;
     }
 
     function exportCSV() {
-      if (!lastAdsData.length) return;
+      if (!lastGroupedData.length) return;
 
-      const headers = ['Keyword', 'Page Name', 'Category', 'Title', 'Body Text', 'Status', 'Platforms', 'CTA', 'Link URL', 'Start Date', 'End Date', 'Page URL'];
-      const rows = lastAdsData.map(ad => {
+      const headers = ['Keyword', 'Page Name', 'Category', '# Ads', 'Title', 'Body Text', 'Status', 'Platforms', 'CTA', 'Link URL', 'Start Date', 'End Date', 'Ad Library URL', 'Page URL'];
+      const rows = lastGroupedData.map(group => {
+        const ad = group.representative;
         const snap = ad.snapshot || {};
         return [
           ad._keyword || '',
           snap.page_name || ad.page_name || '',
           (snap.page_categories || []).join('; '),
+          group.ads.length,
           snap.title || '',
           (snap.body?.text || '').replace(/\n/g, ' '),
           ad.is_active ? 'Active' : 'Inactive',
@@ -724,6 +888,7 @@
           snap.link_url || '',
           formatDate(ad.start_date),
           formatDate(ad.end_date),
+          ad.ad_library_url || '',
           snap.page_profile_uri || ''
         ];
       });
@@ -778,19 +943,21 @@
       progress.style.display = 'block';
       clayAbort = false;
 
-      const total = lastAdsData.length;
+      const total = lastGroupedData.length;
       let sent = 0;
       let failed = 0;
 
       for (let i = 0; i < total; i++) {
         if (clayAbort) break;
 
-        const ad = lastAdsData[i];
+        const group = lastGroupedData[i];
+        const ad = group.representative;
         const snap = ad.snapshot || {};
         const payload = {
           keyword: ad._keyword || '',
           page_name: snap.page_name || ad.page_name || '',
           category: (snap.page_categories || []).join('; '),
+          num_ads: group.ads.length,
           title: snap.title || '',
           body_text: snap.body?.text || '',
           status: ad.is_active ? 'Active' : 'Inactive',
@@ -799,8 +966,9 @@
           link_url: snap.link_url || '',
           start_date: formatDate(ad.start_date),
           end_date: formatDate(ad.end_date),
+          ad_library_url: ad.ad_library_url || '',
           page_url: snap.page_profile_uri || '',
-          image_url: (snap.images && snap.images.length) ? (snap.images[0].original_image_url || '') : ''
+          image_url: (snap.images && snap.images.length) ? (snap.images[0].original_image_url || '') : ((snap.cards && snap.cards.length) ? (snap.cards[0].original_image_url || '') : '')
         };
 
         try {
